@@ -11,6 +11,18 @@ class ValidationError(DomainError):
     """Input does not satisfy a domain rule."""
 
 
+class BatchValidationError(ValidationError):
+    """A batch request contains one or more invalid items.
+
+    ``errors`` lists every conflicting item with its positional index so
+    callers (and the UI) can mark the exact rows that must be corrected.
+    """
+
+    def __init__(self, message, errors):
+        super().__init__(message)
+        self.errors = errors
+
+
 class PermissionDenied(DomainError):
     """Actor is not allowed to perform the action."""
 

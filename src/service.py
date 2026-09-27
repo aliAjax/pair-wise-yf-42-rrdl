@@ -45,17 +45,57 @@ class DomainService:
         next_status, patch = self.rules.validate_transition(
             actor, entity, action, dict(data or {}), self._lookup
         )
-        merged = dict(entity["data"])
+        if self.rules.normalize_kind(entity["kind"]) == "pairing" and action == "complete":
+            updated = self._record_litter(actor, entity, expected, next_status, patch)
+        else:
+            merged = dict(entity["data"])
+            merged.update(patch)
+            updated = self.repository.update_entity(entity_id, expected, next_status, merged)
+            self.audit.record(
+                entity_id,
+                actor,
+                action,
+                entity["status"],
+                updated["status"],
+                {"patch": patch},
+            )
+        return updated
+
+    def _record_litter(self, actor, pairing, expected_version, next_status, patch):
+        offspring = patch["offspring"]
+        animals = [
+            {
+                "id": item["id"],
+                "created_by": actor.user_id,
+                "data": {
+                    key: item[key]
+                    for key in ("name", "sex", "birth_date", "sire_id", "dam_id")
+                },
+            }
+            for item in offspring
+        ]
+        merged = dict(pairing["data"])
         merged.update(patch)
-        updated = self.repository.update_entity(entity_id, expected, next_status, merged)
-        self.audit.record(
-            entity_id,
-            actor,
-            action,
-            entity["status"],
-            updated["status"],
-            {"patch": patch},
+        updated = self.repository.record_births(
+            pairing["id"], expected_version, next_status, merged, animals
         )
+        self.audit.record(
+            pairing["id"],
+            actor,
+            "complete",
+            pairing["status"],
+            updated["status"],
+            {"offspring_ids": [item["id"] for item in offspring]},
+        )
+        for animal in animals:
+            self.audit.record(
+                animal["id"],
+                actor,
+                "birth_register",
+                None,
+                "active",
+                {"pairing_id": pairing["id"], "sire_id": animal["data"]["sire_id"], "dam_id": animal["data"]["dam_id"]},
+            )
         return updated
 
     def get(self, entity_id):
@@ -64,10 +104,10 @@ class DomainService:
             raise NotFoundError("entity not found: " + entity_id)
         return entity
 
-    def list(self, kind=None, status=None):
+    def list(self, kind=None, status=None, filters=None):
         if kind:
             kind = self.rules.normalize_kind(kind)
-        return self.repository.list_entities(kind=kind, status=status)
+        return self.repository.list_entities(kind=kind, status=status, filters=filters)
 
     def audit_log(self, entity_id=None):
         return self.repository.list_audit(entity_id=entity_id)

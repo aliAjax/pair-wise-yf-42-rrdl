@@ -37,6 +37,32 @@ python3 app.py --db ./data.db --port 8308
 
 请求身份通过`X-User-Id`和`X-Role`请求头传入。创建和动作的可执行角色由规则引擎控制。
 
+## 产仔登记（配对完成即建档）
+
+配对批准后，`complete` 动作不再只记一串编号，而是当场为每只幼崽建立 `animal` 档案，并把配对当前的公兽/母兽写成 `sire_id`/`dam_id`：
+
+```json
+POST /api/entities/<pairing_id>/actions
+{
+  "action": "complete",
+  "data": {"offspring": [
+    {"id": "幼崽编号", "name": "姓名", "sex": "male|female|unknown", "birth_date": "YYYY-MM-DD"}
+  ]},
+  "expected_version": 2
+}
+```
+
+整批为一个事务：编号在批内重复、编号已有档案、或任一只资料缺失/不合规（姓名、性别、出生日期，出生日期不得晚于今天）时，全部幼崽都不落档，配对仍停在 `approved`。失败响应为 400，`errors` 数组按行号（从 0 开始）列出每只冲突幼崽及原因（`duplicate_in_batch`、`already_archived`、`invalid_sex`、`invalid_birth_date` 等），演示页面会把对应行标红。
+
+成功后可按亲本查整窝后代：
+
+```
+GET /api/animals?sire_id=<公兽编号>&dam_id=<母兽编号>
+```
+
+两个亲本条件可单独或组合使用；每次建档和配对完成都会写入审计。
+
+
 ## 测试
 
 ```bash

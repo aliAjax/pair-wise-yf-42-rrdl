@@ -9,6 +9,10 @@ def utcnow():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _where_clause(clauses):
+    return (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+
 class SQLiteRepository:
     def __init__(self, path):
         self.path = str(path)
@@ -87,7 +91,7 @@ class SQLiteRepository:
             ).fetchone()
         return self._entity_from_row(row) if row else None
 
-    def list_entities(self, kind=None, status=None):
+    def list_entities(self, kind=None, status=None, field=None, value=None, filters=None):
         clauses = []
         params = []
         if kind:
@@ -96,12 +100,62 @@ class SQLiteRepository:
         if status:
             clauses.append("status = ?")
             params.append(status)
-        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        filters = dict(filters or {})
+        if field is not None and value is not None:
+            filters.setdefault(field, value)
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM entities" + where + " ORDER BY created_at, id", params
+                "SELECT * FROM entities" + _where_clause(clauses) + " ORDER BY created_at, id", params
             ).fetchall()
-        return [self._entity_from_row(row) for row in rows]
+        entities = [self._entity_from_row(row) for row in rows]
+        if filters:
+            entities = [
+                entity
+                for entity in entities
+                if all(entity["data"].get(key) == match for key, match in filters.items())
+            ]
+        return entities
+
+    def record_births(self, pairing_id, expected_version, next_status, pairing_data, offspring):
+        """Create every offspring archive and complete the pairing in one transaction."""
+        now = utcnow()
+        pairing_payload = json.dumps(pairing_data, ensure_ascii=False, sort_keys=True)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT version FROM entities WHERE id = ?", (pairing_id,)
+            ).fetchone()
+            if not row:
+                raise NotFoundError("entity not found: " + pairing_id)
+            current_version = int(row["version"])
+            if expected_version is not None and current_version != int(expected_version):
+                raise ConflictError(
+                    "version conflict: expected %s, found %s"
+                    % (expected_version, current_version)
+                )
+            for animal in offspring:
+                payload = json.dumps(animal["data"], ensure_ascii=False, sort_keys=True)
+                connection.execute(
+                    "INSERT INTO entities(id, kind, status, version, data, created_by, created_at, updated_at) "
+                    "VALUES (?, 'animal', 'active', 1, ?, ?, ?, ?)",
+                    (animal["id"], payload, animal["created_by"], now, now),
+                )
+            connection.execute(
+                "UPDATE entities SET status = ?, version = version + 1, data = ?, updated_at = ? "
+                "WHERE id = ? AND version = ?",
+                (next_status, pairing_payload, now, pairing_id, current_version),
+            )
+            connection.commit()
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            raise ConflictError("offspring id already exists: " + str(exc))
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get_entity(pairing_id)
 
     def find_entities(self, kind, field, value):
         return [
