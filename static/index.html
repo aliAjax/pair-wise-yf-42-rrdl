@@ -5,30 +5,249 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>动物园谱系与繁育协调</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2937; }
-    main { max-width: 820px; margin: auto; }
-    pre { background: #f3f4f6; padding: 1rem; border-radius: 8px; overflow-x: auto; }
-    button { padding: .5rem .8rem; cursor: pointer; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2937; background: #fafafa; }
+    main { max-width: 960px; margin: auto; }
+    section { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 1.2rem 1.4rem; margin-bottom: 1.4rem; }
+    h1 { font-size: 1.5rem; }
+    h2 { font-size: 1.1rem; margin-top: 0; }
+    label { font-size: .85rem; color: #4b5563; }
+    input, select { padding: .4rem .5rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: .9rem; }
+    button { padding: .45rem .9rem; cursor: pointer; border: 0; border-radius: 6px; background: #2563eb; color: #fff; }
+    button.ghost { background: #e5e7eb; color: #1f2937; }
+    button.danger { background: #dc2626; }
+    table { border-collapse: collapse; width: 100%; margin-top: .8rem; }
+    th, td { text-align: left; padding: .35rem .4rem; border-bottom: 1px solid #f3f4f6; }
+    tr.conflict { background: #fef2f2; }
+    tr.conflict input, tr.conflict select { border-color: #dc2626; background: #fff5f5; }
+    .reasons { color: #dc2626; font-size: .78rem; margin-top: .15rem; }
+    .ok { color: #047857; font-weight: 600; }
+    .err { color: #dc2626; font-weight: 600; }
+    .muted { color: #6b7280; font-size: .85rem; }
+    pre { background: #f3f4f6; padding: .8rem; border-radius: 8px; overflow-x: auto; font-size: .8rem; }
+    .row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin: .4rem 0; }
   </style>
 </head>
 <body>
 <main>
-  <h1>动物园谱系与繁育协调</h1>
-  <p>这是最小演示页面。使用浏览器或 curl 调用 JSON API。</p>
-  <p><button onclick="checkHealth()">检查服务状态</button></p>
-  <pre id="result">等待操作</pre>
-  <h2>常用接口</h2>
-  <pre>GET  /health
-GET  /api/&lt;kind&gt;
-POST /api/&lt;kind&gt;
-GET  /api/entities/&lt;id&gt;
-POST /api/entities/&lt;id&gt;/actions</pre>
+  <h1>动物园谱系与繁育协调 · 产仔登记</h1>
+
+  <section>
+    <h2>操作身份</h2>
+    <div class="row">
+      <label>用户 <input id="userId" value="admin" size="10"></label>
+      <label>角色
+        <select id="role">
+          <option value="admin">admin</option>
+          <option value="coordinator">coordinator</option>
+          <option value="registrar">registrar</option>
+          <option value="veterinarian">veterinarian</option>
+          <option value="viewer">viewer</option>
+        </select>
+      </label>
+      <button class="ghost" onclick="checkHealth()">检查服务</button>
+      <span id="health" class="muted"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>1. 选择已批准的配对</h2>
+    <div class="row">
+      <button onclick="loadPairings()">刷新已批准配对</button>
+      <span id="pairingHint" class="muted"></span>
+    </div>
+    <table>
+      <thead><tr><th>配对编号</th><th>公兽</th><th>母兽</th><th>版本</th><th></th></tr></thead>
+      <tbody id="pairingRows"></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>2. 整窝产仔登记</h2>
+    <p class="muted">一次填写每只幼崽的编号、姓名、性别和出生日期；任一只不合规则整批不落档，冲突幼崽会标红。</p>
+    <div id="litterPanel" class="muted">请先在上方选择一个已批准的配对。</div>
+    <table id="cubTable" hidden>
+      <thead>
+        <tr><th>#</th><th>编号</th><th>姓名</th><th>性别</th><th>出生日期</th><th></th></tr>
+      </thead>
+      <tbody id="cubRows"></tbody>
+    </table>
+    <div class="row" id="cubActions" hidden style="margin-top:.7rem">
+      <button class="ghost" onclick="addCubRow()">再加一只</button>
+      <button onclick="submitLitter()">整批登记</button>
+      <button class="danger" onclick="clearResult()">清空提示</button>
+    </div>
+    <div id="result" style="margin-top:.8rem"></div>
+  </section>
+
+  <section>
+    <h2>3. 按亲本查询整窝后代</h2>
+    <div class="row">
+      <input id="parentId" placeholder="亲本编号（公兽或母兽）" size="28">
+      <button onclick="queryOffspring()">查询后代</button>
+    </div>
+    <pre id="offspringResult">尚未查询</pre>
+  </section>
 </main>
 <script>
+let selectedPairing = null;
+let cubSeq = 0;
+
+function headers() {
+  return {
+    'Content-Type': 'application/json',
+    'X-User-Id': document.getElementById('userId').value || 'anonymous',
+    'X-Role': document.getElementById('role').value,
+  };
+}
+
 async function checkHealth() {
   const response = await fetch('/health');
-  document.getElementById('result').textContent = JSON.stringify(await response.json(), null, 2);
+  const data = await response.json();
+  document.getElementById('health').textContent = '服务状态：' + data.status;
 }
+
+async function loadPairings() {
+  const response = await fetch('/api/pairings?status=approved');
+  const data = await response.json();
+  const tbody = document.getElementById('pairingRows');
+  tbody.innerHTML = '';
+  const items = data.items || [];
+  document.getElementById('pairingHint').textContent =
+    items.length ? '共 ' + items.length + ' 个已批准配对' : '当前没有已批准的配对';
+  const animals = await fetch('/api/animals').then(r => r.json());
+  const nameOf = {};
+  (animals.items || []).forEach(a => { nameOf[a.id] = a.data.name + '（' + a.id + '）'; });
+  items.forEach(p => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td>' + p.id + '</td><td>' + (nameOf[p.data.sire_id] || p.data.sire_id) +
+      '</td><td>' + (nameOf[p.data.dam_id] || p.data.dam_id) + '</td><td>v' + p.version +
+      '</td><td></td>';
+    const btn = document.createElement('button');
+    btn.textContent = '选择登记';
+    btn.onclick = () => selectPairing(p);
+    tr.lastElementChild.appendChild(btn);
+    tbody.appendChild(tr);
+  });
+}
+
+function selectPairing(pairing) {
+  selectedPairing = pairing;
+  document.getElementById('litterPanel').innerHTML =
+    '配对 <b>' + pairing.id + '</b>，父本 <b>' + pairing.data.sire_id + '</b>，' +
+    '母本 <b>' + pairing.data.dam_id + '</b>。登记成功后将自动写入幼崽父母。';
+  document.getElementById('cubTable').hidden = false;
+  document.getElementById('cubActions').hidden = false;
+  document.getElementById('cubRows').innerHTML = '';
+  cubSeq = 0;
+  addCubRow();
+  addCubRow();
+}
+
+function addCubRow(prefill) {
+  cubSeq += 1;
+  const tr = document.createElement('tr');
+  tr.id = 'cub-' + cubSeq;
+  tr.innerHTML =
+    '<td class="idx">' + (tr.rowIndex + 1) + '</td>' +
+    '<td><input class="f-id" size="12"></td>' +
+    '<td><input class="f-name" size="12"></td>' +
+    '<td><select class="f-sex"><option value="male">公</option><option value="female">母</option></select></td>' +
+    '<td><input class="f-birth" type="date"></td>' +
+    '<td><button class="danger" onclick="this.closest(\'tr\').remove(); reindex()">移除</button></td>';
+  document.getElementById('cubRows').appendChild(tr);
+  if (prefill) {
+    tr.querySelector('.f-id').value = prefill.id || '';
+    tr.querySelector('.f-name').value = prefill.name || '';
+    tr.querySelector('.f-sex').value = prefill.sex || 'male';
+    tr.querySelector('.f-birth').value = prefill.birth_date || '';
+  }
+}
+
+function reindex() {
+  document.querySelectorAll('#cubRows tr').forEach((tr, i) => {
+    tr.querySelector('.idx').textContent = i + 1;
+    tr.classList.remove('conflict');
+    const old = tr.querySelector('.reasons');
+    if (old) old.remove();
+  });
+}
+
+function collectCubs() {
+  return [...document.querySelectorAll('#cubRows tr')].map(tr => ({
+    id: tr.querySelector('.f-id').value.trim(),
+    name: tr.querySelector('.f-name').value.trim(),
+    sex: tr.querySelector('.f-sex').value,
+    birth_date: tr.querySelector('.f-birth').value,
+  }));
+}
+
+async function submitLitter() {
+  if (!selectedPairing) return;
+  document.querySelectorAll('#cubRows tr').forEach(tr => tr.classList.remove('conflict'));
+  document.querySelectorAll('.reasons').forEach(el => el.remove());
+  const cubs = collectCubs();
+  const body = {
+    action: 'complete',
+    expected_version: selectedPairing.version,
+    data: { offspring: cubs },
+  };
+  const response = await fetch('/api/entities/' + selectedPairing.id + '/actions', {
+    method: 'POST', headers: headers(), body: JSON.stringify(body),
+  });
+  const data = await response.json();
+  const box = document.getElementById('result');
+  if (response.ok) {
+    box.innerHTML = '<span class="ok">登记成功：窝编号 ' + data.id +
+      '，幼崽 ' + data.data.offspring_ids.join('、') + '，配对已完成。</span>';
+    selectedPairing = null;
+    document.getElementById('cubTable').hidden = true;
+    document.getElementById('cubActions').hidden = true;
+    loadPairings();
+  } else if (data.conflicts) {
+    box.innerHTML = '<span class="err">' + data.error + '</span>' +
+      '<p class="muted">配对仍停留在已批准，资料已保留，修正后可重新提交。</p>';
+    const rows = document.querySelectorAll('#cubRows tr');
+    data.conflicts.forEach(c => {
+      const tr = rows[c.index];
+      if (!tr) return;
+      tr.classList.add('conflict');
+      const div = document.createElement('div');
+      div.className = 'reasons';
+      div.textContent = '⚠ ' + c.reasons.join('；');
+      tr.lastElementChild.appendChild(div);
+    });
+  } else {
+    box.innerHTML = '<span class="err">[' + data.type + '] ' + data.error + '</span>';
+  }
+}
+
+function clearResult() {
+  document.getElementById('result').innerHTML = '';
+  reindex();
+}
+
+async function queryOffspring() {
+  const id = document.getElementById('parentId').value.trim();
+  if (!id) return;
+  const response = await fetch('/api/animals?parent_id=' + encodeURIComponent(id));
+  const data = await response.json();
+  const box = document.getElementById('offspringResult');
+  if (!response.ok) {
+    box.textContent = '[' + data.type + '] ' + data.error;
+    return;
+  }
+  if (!data.items.length) {
+    box.textContent = '该亲本暂无登记后代';
+    return;
+  }
+  box.textContent = data.items.map(a =>
+    a.id + '  ' + a.data.name + '  ' +
+    (a.data.sex === 'male' ? '公' : '母') + '  出生 ' + a.data.birth_date +
+    '\n  父：' + a.data.sire_id + '  母：' + a.data.dam_id
+  ).join('\n');
+}
+
+loadPairings();
 </script>
 </body>
 </html>

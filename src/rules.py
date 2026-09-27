@@ -1,6 +1,8 @@
-from datetime import datetime, timedelta
+import re
+from datetime import date, datetime, timedelta
 
 from .domain import (
+    BatchValidationError,
     ConflictError,
     InvalidTransition,
     PermissionDenied,
@@ -39,8 +41,101 @@ def _validate_pairing(actor, entity, data, lookup):
     return {"approved_by": actor.user_id}
 
 
+def _clean(value):
+    return str(value).strip() if isinstance(value, str) else value
+
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _validate_birth_date(value):
+    if not isinstance(value, str) or not _DATE_RE.match(value):
+        return "birth_date must be YYYY-MM-DD"
+    try:
+        born = datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return "birth_date is not a real calendar date"
+    if born > date.today():
+        return "birth_date cannot be in the future"
+    return None
+
+
+def _validate_complete_pairing(actor, entity, data, lookup):
+    sire = _find_one(lookup, "animal", "id", entity["data"].get("sire_id"))
+    dam = _find_one(lookup, "animal", "id", entity["data"].get("dam_id"))
+    if not sire or not dam:
+        raise ValidationError("pairing parents are missing from the studbook")
+    if sire["data"].get("sex") != "male":
+        raise ValidationError("recorded sire is not a male animal")
+    if dam["data"].get("sex") != "female":
+        raise ValidationError("recorded dam is not a female animal")
+
+    offspring = data.get("offspring")
+    if not isinstance(offspring, list) or not offspring:
+        raise ValidationError("offspring must be a non-empty list")
+
+    seen_ids = {}
+    for cub in offspring:
+        cub_id = _clean(cub.get("id")) if isinstance(cub, dict) else None
+        if cub_id:
+            seen_ids[cub_id] = seen_ids.get(cub_id, 0) + 1
+
+    conflicts = []
+    normalized = []
+    for index, cub in enumerate(offspring):
+        reasons = []
+        if not isinstance(cub, dict):
+            conflicts.append({"index": index, "reasons": ["offspring entry must be an object"]})
+            continue
+        cub_id = _clean(cub.get("id"))
+        name = _clean(cub.get("name"))
+        sex = _clean(cub.get("sex"))
+        birth_date = _clean(cub.get("birth_date"))
+        if not cub_id:
+            reasons.append("missing required field: id")
+        else:
+            if seen_ids.get(cub_id, 0) > 1:
+                reasons.append("offspring id is duplicated within this batch")
+            existing = _find_one(lookup, "animal", "id", cub_id)
+            if existing:
+                reasons.append("an animal record already exists for this id")
+        if not name:
+            reasons.append("missing required field: name")
+        if sex not in ("male", "female"):
+            reasons.append("sex must be male or female")
+        birth_problem = _validate_birth_date(birth_date)
+        if birth_problem:
+            reasons.append(birth_problem)
+        if reasons:
+            conflicts.append({"index": index, "id": cub_id, "reasons": reasons})
+        else:
+            normalized.append(
+                {
+                    "id": cub_id,
+                    "name": name,
+                    "sex": sex,
+                    "birth_date": birth_date,
+                }
+            )
+
+    if conflicts:
+        raise BatchValidationError(
+            "%d of %d offspring failed validation; no records were created"
+            % (len(conflicts), len(offspring)),
+            conflicts=conflicts,
+        )
+
+    return {
+        "offspring_ids": [cub["id"] for cub in normalized],
+        "_offspring": normalized,
+    }
+
+
 CUSTOM_CREATE = {'animal': _validate_animal}
-CUSTOM_TRANSITIONS = {('pairing', 'approve'): _validate_pairing}
+CUSTOM_TRANSITIONS = {
+    ('pairing', 'approve'): _validate_pairing,
+    ('pairing', 'complete'): _validate_complete_pairing,
+}
 
 
 class RuleEngine:
@@ -48,7 +143,7 @@ class RuleEngine:
     INITIAL_STATUS = {'animal': 'active', 'pairing': 'proposed', 'transfer': 'planned'}
     TRANSITIONS = {'animal': {'mark_deceased': (('active',), 'deceased'), 'quarantine_animal': (('active',), 'quarantined'), 'release_quarantine': (('quarantined',), 'active')}, 'pairing': {'approve': (('proposed',), 'approved'), 'reject': (('proposed',), 'rejected'), 'complete': (('approved',), 'completed')}, 'transfer': {'authorize': (('planned',), 'authorized'), 'ship': (('authorized',), 'in_transit'), 'arrive': (('in_transit',), 'completed')}}
     CREATE_REQUIRED = {'animal': ('name', 'sex'), 'pairing': ('proposed_by',), 'transfer': ('animal_id', 'from_institution', 'to_institution')}
-    ACTION_REQUIRED = {('animal', 'mark_deceased'): ('cause',), ('animal', 'quarantine_animal'): ('reason',), ('pairing', 'approve'): ('sire_id', 'dam_id', 'approvals'), ('pairing', 'reject'): ('reason',), ('pairing', 'complete'): ('offspring_ids',), ('transfer', 'authorize'): ('permit_id',), ('transfer', 'ship'): ('transport_id',), ('transfer', 'arrive'): ('arrival_date',)}
+    ACTION_REQUIRED = {('animal', 'mark_deceased'): ('cause',), ('animal', 'quarantine_animal'): ('reason',), ('pairing', 'approve'): ('sire_id', 'dam_id', 'approvals'), ('pairing', 'reject'): ('reason',), ('pairing', 'complete'): ('offspring',), ('transfer', 'authorize'): ('permit_id',), ('transfer', 'ship'): ('transport_id',), ('transfer', 'arrive'): ('arrival_date',)}
     CREATE_ROLES = {'animal': ('admin', 'registrar'), 'pairing': ('admin', 'coordinator'), 'transfer': ('admin', 'registrar')}
     ROLE_ACTIONS = {'mark_deceased': ('admin', 'veterinarian'), 'quarantine_animal': ('admin', 'veterinarian'), 'release_quarantine': ('admin', 'veterinarian'), 'approve': ('admin', 'coordinator'), 'reject': ('admin', 'coordinator'), 'complete': ('admin', 'coordinator'), 'authorize': ('admin', 'registrar'), 'ship': ('admin', 'registrar'), 'arrive': ('admin', 'registrar')}
 

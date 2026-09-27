@@ -71,7 +71,11 @@ def create_handler(service, rules, static_dir):
                 status = 400
             else:
                 status = 500
-            self._send(status, {"error": str(exc), "type": type(exc).__name__})
+            payload = {"error": str(exc), "type": type(exc).__name__}
+            conflicts = getattr(exc, "conflicts", None)
+            if conflicts:
+                payload["conflicts"] = conflicts
+            self._send(status, payload)
 
         def do_GET(self):
             try:
@@ -94,6 +98,25 @@ def create_handler(service, rules, static_dir):
                         return self._send(200, service.get(parts[2]))
                     query = parse_qs(parsed.query)
                     status = query.get("status", [None])[0]
+                    parent_id = query.get("parent_id", [None])[0]
+                    if parent_id:
+                        if rules.normalize_kind(parts[1]) != "animal":
+                            raise ValidationError("parent_id only applies to animals")
+                        return self._send(200, {"items": service.offspring_of(parent_id)})
+                    sire_id = query.get("sire_id", [None])[0]
+                    dam_id = query.get("dam_id", [None])[0]
+                    pairing_id = query.get("pairing_id", [None])[0]
+                    if sire_id or dam_id or pairing_id:
+                        if rules.normalize_kind(parts[1]) != "animal":
+                            raise ValidationError("parent filters only apply to animals")
+                        items = service.list(parts[1], status=status)
+                        if sire_id:
+                            items = [item for item in items if item["data"].get("sire_id") == sire_id]
+                        if dam_id:
+                            items = [item for item in items if item["data"].get("dam_id") == dam_id]
+                        if pairing_id:
+                            items = [item for item in items if item["data"].get("pairing_id") == pairing_id]
+                        return self._send(200, {"items": items})
                     return self._send(
                         200,
                         {"items": service.list(parts[1], status=status)},

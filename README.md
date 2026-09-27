@@ -26,6 +26,21 @@ python3 app.py --db ./data.db --port 8308
 
 - `animal`：个体谱系；`pairing`：配对建议；`transfer`：机构和运输记录。
 
+## 产仔登记
+
+对已批准（`approved`）的配对提交 `complete` 动作即完成产仔登记，请求体为：
+
+```json
+{"action": "complete", "data": {"offspring": [
+  {"id": "baby-1", "name": "团团", "sex": "male", "birth_date": "2026-05-10"}
+]}}
+```
+
+- 每只幼崽必须提供编号、姓名、性别（`male`/`female`）和出生日期（`YYYY-MM-DD`，不得晚于当天）。
+- 登记成功时系统当场为每只幼崽建立动物档案，并自动写入当前配对的公兽（`sire_id`）、母兽（`dam_id`）和来源配对（`pairing_id`），配对流转为 `completed`。
+- 编号在批内重复、编号已有档案或任一资料不合规时，整批不落档，配对仍停留在 `approved`；响应为 `400`，`conflicts` 数组按 `index` 标出每只冲突幼崽及原因。
+- 按亲本查整窝后代：`GET /api/animals?parent_id=<亲本编号>`（也可用 `sire_id`、`dam_id`、`pairing_id` 过滤）。
+
 ## 主要接口
 
 - `GET /health`：健康检查。

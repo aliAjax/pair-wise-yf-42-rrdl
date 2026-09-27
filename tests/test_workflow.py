@@ -32,7 +32,7 @@ class WorkflowTest(unittest.TestCase):
 
     def test_full_workflow(self):
         created = {}
-        steps = [{'op': 'create', 'as': 'sire', 'kind': 'animal', 'data': {'name': 'M-1', 'sex': 'male'}}, {'op': 'create', 'as': 'dam', 'kind': 'animal', 'data': {'name': 'F-1', 'sex': 'female'}}, {'op': 'create', 'as': 'pairing', 'kind': 'pairing', 'data': {'proposed_by': 'coordinator'}}, {'op': 'transition', 'target': 'pairing', 'action': 'approve', 'data': {'sire_id': '{sire}', 'dam_id': '{dam}', 'approvals': ['vet-1']}, 'expect': 'approved'}, {'op': 'transition', 'target': 'pairing', 'action': 'complete', 'data': {'offspring_ids': ['offspring-1']}, 'expect': 'completed'}, {'op': 'create', 'as': 'transfer', 'kind': 'transfer', 'data': {'animal_id': '{sire}', 'from_institution': 'Zoo-A', 'to_institution': 'Zoo-B'}}, {'op': 'transition', 'target': 'transfer', 'action': 'authorize', 'data': {'permit_id': 'P-1'}, 'expect': 'authorized'}, {'op': 'transition', 'target': 'transfer', 'action': 'ship', 'data': {'transport_id': 'T-1'}, 'expect': 'in_transit'}, {'op': 'transition', 'target': 'transfer', 'action': 'arrive', 'data': {'arrival_date': '2026-05-01'}, 'expect': 'completed'}]
+        steps = [{'op': 'create', 'as': 'sire', 'kind': 'animal', 'data': {'name': 'M-1', 'sex': 'male'}}, {'op': 'create', 'as': 'dam', 'kind': 'animal', 'data': {'name': 'F-1', 'sex': 'female'}}, {'op': 'create', 'as': 'pairing', 'kind': 'pairing', 'data': {'proposed_by': 'coordinator'}}, {'op': 'transition', 'target': 'pairing', 'action': 'approve', 'data': {'sire_id': '{sire}', 'dam_id': '{dam}', 'approvals': ['vet-1']}, 'expect': 'approved'}, {'op': 'transition', 'target': 'pairing', 'action': 'complete', 'data': {'offspring': [{'id': 'offspring-1', 'name': 'Baby-1', 'sex': 'male', 'birth_date': '2026-04-01'}, {'id': 'offspring-2', 'name': 'Baby-2', 'sex': 'female', 'birth_date': '2026-04-01'}]}, 'expect': 'completed'}, {'op': 'create', 'as': 'transfer', 'kind': 'transfer', 'data': {'animal_id': '{sire}', 'from_institution': 'Zoo-A', 'to_institution': 'Zoo-B'}}, {'op': 'transition', 'target': 'transfer', 'action': 'authorize', 'data': {'permit_id': 'P-1'}, 'expect': 'authorized'}, {'op': 'transition', 'target': 'transfer', 'action': 'ship', 'data': {'transport_id': 'T-1'}, 'expect': 'in_transit'}, {'op': 'transition', 'target': 'transfer', 'action': 'arrive', 'data': {'arrival_date': '2026-05-01'}, 'expect': 'completed'}]
         for step in steps:
             if step["op"] == "create":
                 entity = self.service.create(
@@ -52,6 +52,17 @@ class WorkflowTest(unittest.TestCase):
                 )
             if "expect" in step:
                 self.assertEqual(entity["status"], step["expect"])
+
+        litter = self.service.offspring_of(created["sire"])
+        self.assertEqual({item["id"] for item in litter}, {"offspring-1", "offspring-2"})
+        for cub in litter:
+            self.assertEqual(cub["data"]["sire_id"], created["sire"])
+            self.assertEqual(cub["data"]["dam_id"], created["dam"])
+            self.assertEqual(cub["data"]["pairing_id"], created["pairing"])
+        self.assertEqual(
+            self.service.offspring_of(created["dam"]),
+            litter,
+        )
 
 
 if __name__ == "__main__":

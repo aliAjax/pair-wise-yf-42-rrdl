@@ -140,6 +140,50 @@ class SQLiteRepository:
             connection.close()
         return self.get_entity(entity_id)
 
+    def complete_pairing_with_offspring(
+        self, pairing_id, expected_version, offspring, pairing_data, actor_id
+    ):
+        """Create every offspring record and complete the pairing in one transaction."""
+        now = utcnow()
+        payload = json.dumps(pairing_data, ensure_ascii=False, sort_keys=True)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT version FROM entities WHERE id = ?", (pairing_id,)
+            ).fetchone()
+            if not row:
+                raise NotFoundError("entity not found: " + pairing_id)
+            current_version = int(row["version"])
+            if expected_version is not None and current_version != int(expected_version):
+                raise ConflictError(
+                    "version conflict: expected %s, found %s"
+                    % (expected_version, current_version)
+                )
+            for cub in offspring:
+                cub_payload = json.dumps(cub["data"], ensure_ascii=False, sort_keys=True)
+                connection.execute(
+                    "INSERT INTO entities(id, kind, status, version, data, created_by, created_at, updated_at) "
+                    "VALUES (?, 'animal', 'active', 1, ?, ?, ?, ?)",
+                    (cub["id"], cub_payload, actor_id, now, now),
+                )
+            connection.execute(
+                "UPDATE entities SET status = 'completed', version = version + 1, "
+                "data = ?, updated_at = ? WHERE id = ? AND version = ?",
+                (payload, now, pairing_id, current_version),
+            )
+            connection.commit()
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            raise ConflictError("offspring id conflict: " + str(exc))
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get_entity(pairing_id), [
+            self.get_entity(cub["id"]) for cub in offspring
+        ]
     def append_audit(self, entity_id, actor_id, actor_role, action, from_status, to_status, detail):
         with self._connect() as connection:
             connection.execute(

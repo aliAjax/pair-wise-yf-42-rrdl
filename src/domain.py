@@ -27,6 +27,14 @@ class InvalidTransition(DomainError):
     """The requested state transition is not valid."""
 
 
+class BatchValidationError(ValidationError):
+    """At least one item in a batch failed validation; nothing was written."""
+
+    def __init__(self, message, conflicts=None):
+        super().__init__(message)
+        self.conflicts = conflicts or []
+
+
 class Role(str, Enum):
     viewer = "viewer"
     admin = "admin"
